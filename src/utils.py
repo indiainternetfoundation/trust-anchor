@@ -103,7 +103,7 @@ def validate_dnskey_ds(dnskey_rrset, ds_rrset, zone_name):
 
     return False
 
-def build_xml(zone_text, dnskey_rrset, ds_rrset):
+def build_xml(zone_text, dnskey_rrset, ds_rrset, source=SOURCE):
     """
     Build a TrustAnchor XML document.
 
@@ -115,7 +115,7 @@ def build_xml(zone_text, dnskey_rrset, ds_rrset):
         "TrustAnchor",
         {
             "id": str(uuid.uuid4()).upper(),
-            "source": SOURCE
+            "source": source
         }
     )
 

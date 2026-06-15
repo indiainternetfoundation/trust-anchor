@@ -9,11 +9,16 @@ import xml.etree.ElementTree as ET
 from fastapi import FastAPI, HTTPException, Response
 
 import dns.name
-import dns.resolver
+from dotenv import load_dotenv
 
 import utils
 
 
+# Load the .env file
+load_dotenv()
+
+ENDPOINT = os.getenv("ENDPOINT", "trust-anchor.xml")
+SOURCE = os.getenv("SOURCE", "generated")
 ZONE = os.getenv("ZONE", "in.")
 REFRESH_INTERVAL = 3600  # seconds
 
@@ -48,7 +53,8 @@ async def refresh_xml():
             xml_root = utils.build_xml(
                 zone_name.to_text(),
                 dnskey_rrset,
-                ds_rrset
+                ds_rrset,
+                source = SOURCE
             )
 
             xml_bytes = ET.tostring(
@@ -100,11 +106,15 @@ async def healthz():
     return {
         "status": "ok" if latest_xml else "starting",
         "last_error": last_error,
-        "has_xml": latest_xml is not None
+        "has_xml": latest_xml is not None,
+        "endpoint": ENDPOINT,
+        "source": SOURCE,
+        "zone": ZONE,
+        "refresh_interval": REFRESH_INTERVAL
     }
 
 
-@app.get("/trust-anchor.xml")
+@app.get(f"/{ENDPOINT}")
 async def trust_anchor():
 
     if latest_xml is None:
