@@ -1,0 +1,12 @@
+{
+	"version": 2,
+	"public": false,
+	"builds": [{ "src": "src/main.py", "use": "@vercel/python" }],
+	"routes": [
+		{ "src": "/", "dest": "src/main.py" },
+		{ "src": "/docs", "dest": "src/main.py" },
+		{ "src": "/openapi.json", "dest": "src/main.py" },
+        { "src": "/healthz", "dest": "src/main.py" },
+        { "src": "/in-zone/in-trust-anchor.xml", "dest": "src/main.py" }
+	]
+}
