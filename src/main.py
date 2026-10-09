@@ -41,7 +41,8 @@ KNOWN_SIGNED_ZONES = [
     "mil.in.",
     "bank.in.",
     "fin.in.",
-    "nic.in."
+    "nic.in.",
+    "ir.in"
 ]
 
 # All requested .in zones list for reference
@@ -223,4 +224,4 @@ async def get_root_trust_anchor(filename: str):
             detail=f"Unable to generate Trust Anchor for '{filename}': {str(e)}"
         )
 
-
+
