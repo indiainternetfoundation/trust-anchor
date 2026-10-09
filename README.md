@@ -1,95 +1,60 @@
 # trust-anchor
 
-Host trust anchors automatically, for any zone, whenever and wherever you want.
+Host trust anchors automatically, for any zone (including `.in` and second-level `.in` zones), formatted according to RFC 7958 (same standard as IANA `root-anchors.xml`).
 
 ## Overview
 
-IANA hosts [root-anchors.xml](https://data.iana.org/root-anchors/root-anchors.xml) for use as trust anchors to verify DNSSEC in root servers. However, no trust anchor is maintained for other zones (TLDs, SLDs, or other zones), even though this is compliant with existing RFCs and does not violate any standards.
+IANA hosts [root-anchors.xml](https://data.iana.org/root-anchors/root-anchors.xml) for use as trust anchors to verify DNSSEC in root servers. However, no trust anchor is maintained for other zones (TLDs, SLDs, or sub-zones), even though this is compliant with existing RFCs.
 
 **trust-anchor** is a FastAPI-based server that:
-- Fetches DNSSEC trust anchors (DNSKEY and DS records) for any specified zone
-- Validates the DNSKEY/DS records
-- Hosts the trust anchor in proper XML format (compatible with DNSSEC validators)
-- Automatically refreshes the trust anchor at configurable intervals
+- Fetches DNSSEC trust anchors (DNSKEY and DS records) for `.in` and any requested zone
+- Extracts signature inception metadata (`validFrom`) from DNSSEC RRSIGs
+- Validates the DNSKEY and DS record relationships cryptographically
+- Publishes trust anchors in RFC 7958 XML format (identical to IANA root trust anchor structure)
+- Supports multi-zone endpoints under `/in-zone/{zone-slug}.xml` (e.g. `in.xml`, `co-in.xml`, `gov-in.xml`, `ac-in.xml`)
+- Automatically refreshes trust anchors at configurable background intervals
 
 ## Features
 
-- 🔄 **Automatic Refresh**: Periodically fetches and validates the latest DNSSEC records
-- 🛡️ **DNSSEC Validation**: Validates DNSKEY and DS record relationships
-- 🌍 **Zone Agnostic**: Works with any DNS zone (root, TLD, SLD, or custom zones)
-- 📋 **XML Output**: Serves trust anchors in standard XML format
-- ⚙️ **Configurable**: Environment variable-based configuration
-- 🚀 **FastAPI**: Modern, fast, async-capable Python web framework
+- 🔄 **Multi-Zone & Sub-Zone Support**: Serves `in.`, `co.in.`, `gov.in.`, `ac.in.`, `res.in.`, `nic.in.`, `firm.in.`, `net.in.`, `org.in.`, `gen.in.`, `ind.in.`, `edu.in.`, `mil.in.`, `bank.in.`, `fin.in.`, etc.
+- 📜 **RFC 7958 Format**: Includes `<KeyDigest id="..." validFrom="...">`, `<KeyTag>`, `<Algorithm>`, `<DigestType>`, `<Digest>`, `<PublicKey>`, and `<Flags>`.
+- 🛡️ **DNSSEC Validation**: Validates child DNSKEY records against parent DS records.
+- 🔗 **Flexible URL Routing**: Serves `/in-zone/in.xml`, `/in-zone/co-in.xml`, `/in-zone/gov-in.xml`, etc.
+- ⚡ **Caching & On-Demand Fetching**: Pre-caches active signed zones and dynamically resolves any requested zone on demand.
 
-## Prerequisites
+## Endpoint Structure
 
-- Python 3.7+
-- DNS zone with properly configured DNSSEC
+| URL Pattern | Zone Name | Description |
+| :--- | :--- | :--- |
+| `https://trust.aiori.in/in-zone/in.xml` | `in.` | Main `.in` TLD trust anchor |
+| `https://trust.aiori.in/in-zone/co-in.xml` | `co.in.` | Commercial sub-zone trust anchor |
+| `https://trust.aiori.in/in-zone/gov-in.xml` | `gov.in.` | Government sub-zone trust anchor |
+| `https://trust.aiori.in/in-zone/ac-in.xml` | `ac.in.` | Academic sub-zone trust anchor |
+| `https://trust.aiori.in/in-zone/` | All | Directory & Status index of all `.in` zones |
 
-## Installation
+## Installation & Running
 
-1. Clone the repository:
+1. Clone and install dependencies:
 ```bash
 git clone https://github.com/indiainternetfoundation/trust-anchor
 cd trust-anchor
-```
-
-2. Install dependencies:
-```bash
 pip install -r requirements.txt
 ```
 
-## Configuration
-
-Configure the server using environment variables in a `.env` file:
-
+2. Configure environment variables in `.env`:
 ```env
-# Zone to fetch trust anchor for (default: in.)
-ZONE=example.com
-
-# HTTP endpoint path to serve the trust anchor (default: trust-anchor.xml)
+ZONE=in.
+SOURCE=https://trust.aiori.in/in-zone/in.xml
 ENDPOINT=trust-anchor.xml
-
-# Source identifier in the generated XML (default: generated)
-SOURCE=my-service
-
-# Refresh interval in seconds (default: 3600)
 REFRESH_INTERVAL=3600
 ```
 
-## Usage
-
-Start the server:
-
+3. Run the server:
 ```bash
-python -m fastapi run src/main.py
-```
-
-Or with uvicorn directly:
-
-```bash
-uvicorn src.main:app --reload
-```
-
-The trust anchor will be available at:
-```
-http://localhost:8000/trust-anchor.xml
-```
-
-(or whatever path you configured in `ENDPOINT`)
-
-## Project Structure
-
-```
-trust-anchor/
-├── src/
-│   ├── main.py          # FastAPI application entry point
-│   └── utils.py         # DNSSEC validation utilities
-├── requirements.txt     # Python dependencies
-├── README.md           # This file
-└── LICENSE             # Project license
+uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```
 
 ## License
 
 See LICENSE file for details.
+
