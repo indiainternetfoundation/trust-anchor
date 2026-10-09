@@ -221,4 +221,6 @@ async def get_root_trust_anchor(filename: str):
         raise HTTPException(
             status_code=404,
             detail=f"Unable to generate Trust Anchor for '{filename}': {str(e)}"
-        )
+        )
+
+

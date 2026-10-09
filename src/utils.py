@@ -251,11 +251,13 @@ def validate_dnskey_ds(dnskey_rrset, ds_rrset, zone_name: dns.name.Name) -> bool
 
 def build_xml(zone_text: str, dnskey_rrset, ds_rrset, source=SOURCE, valid_from=None) -> ET.Element:
     """
-    Build a TrustAnchor XML document matching RFC 7958 format.
+    Build a TrustAnchor XML document matching RFC 7958 and RFC 9718 format.
+    Includes all DS records and all published DNSKEYs (including 256 ZSKs and 257 KSKs).
     """
     trust_anchor = ET.Element(
         "TrustAnchor",
         {
+            "xmlns": "urn:ietf:params:xml:ns:trust-anchor",
             "id": str(uuid.uuid4()).upper(),
             "source": source
         }
@@ -264,15 +266,20 @@ def build_xml(zone_text: str, dnskey_rrset, ds_rrset, source=SOURCE, valid_from=
     zone_elem = ET.SubElement(trust_anchor, "Zone")
     zone_elem.text = zone_text
 
-    dnskeys = {}
+    zone_name = normalize_zone(zone_text)
+
+    dnskeys_by_tag = {}
     if dnskey_rrset:
         for dnskey in dnskey_rrset:
             keytag = dns.dnssec.key_id(dnskey)
-            dnskeys[keytag] = dnskey
+            dnskeys_by_tag[keytag] = dnskey
 
     if not valid_from:
         valid_from = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
+    processed_keytags = set()
+
+    # 1. Output KeyDigest for parent DS records
     for ds in (ds_rrset or []):
         kd_attrs = {"id": f"K{ds.key_tag}"}
         if valid_from:
@@ -285,8 +292,38 @@ def build_xml(zone_text: str, dnskey_rrset, ds_rrset, source=SOURCE, valid_from=
         ET.SubElement(kd, "DigestType").text = str(ds.digest_type)
         ET.SubElement(kd, "Digest").text = ds.digest.hex().upper()
 
-        dnskey = dnskeys.get(ds.key_tag)
+        dnskey = dnskeys_by_tag.get(ds.key_tag)
         if dnskey:
+            ET.SubElement(kd, "PublicKey").text = base64.b64encode(dnskey.key).decode()
+            ET.SubElement(kd, "Flags").text = str(dnskey.flags)
+            processed_keytags.add(ds.key_tag)
+
+    # 2. Output KeyDigest for any remaining DNSKEYs (including Flags=256 ZSKs)
+    if dnskey_rrset:
+        for dnskey in dnskey_rrset:
+            keytag = dns.dnssec.key_id(dnskey)
+            if keytag in processed_keytags:
+                continue
+
+            # Compute SHA-256 (DigestType 2) digest for ZSK / additional key
+            try:
+                ds_calc = dns.dnssec.make_ds(zone_name, dnskey, 2)
+                digest_hex = ds_calc.digest.hex().upper()
+                digest_type_str = "2"
+            except Exception:
+                digest_hex = ""
+                digest_type_str = "2"
+
+            kd_attrs = {"id": f"K{keytag}"}
+            if valid_from:
+                kd_attrs["validFrom"] = valid_from
+
+            kd = ET.SubElement(trust_anchor, "KeyDigest", kd_attrs)
+            ET.SubElement(kd, "KeyTag").text = str(keytag)
+            ET.SubElement(kd, "Algorithm").text = str(dnskey.algorithm)
+            ET.SubElement(kd, "DigestType").text = digest_type_str
+            if digest_hex:
+                ET.SubElement(kd, "Digest").text = digest_hex
             ET.SubElement(kd, "PublicKey").text = base64.b64encode(dnskey.key).decode()
             ET.SubElement(kd, "Flags").text = str(dnskey.flags)
 
@@ -344,5 +381,7 @@ def generate_trust_anchor(zone: str, source=SOURCE) -> str:
 
     pretty_indent(root)
     return ET.tostring(root, encoding="unicode")
+
+
 
 

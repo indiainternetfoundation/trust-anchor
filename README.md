@@ -1,58 +1,44 @@
 # trust-anchor
 
-Host trust anchors automatically, for any zone (including `.in` and second-level `.in` zones), formatted according to RFC 7958 (same standard as IANA `root-anchors.xml`).
+Host trust anchors automatically, for any zone (including `.in` and second-level `.in` zones), formatted according to **RFC 9718** and **RFC 7958** (same standard as IANA `root-anchors.xml`).
 
 ## Overview
 
-IANA hosts [root-anchors.xml](https://data.iana.org/root-anchors/root-anchors.xml) for use as trust anchors to verify DNSSEC in root servers. However, no trust anchor is maintained for other zones (TLDs, SLDs, or sub-zones), even though this is compliant with existing RFCs.
+IANA hosts [root-anchors.xml](https://data.iana.org/root-anchors/root-anchors.xml) for use as trust anchors to verify DNSSEC in root servers.
 
-**trust-anchor** is a FastAPI-based server that:
-- Fetches DNSSEC trust anchors (DNSKEY and DS records) for `.in` and any requested zone
-- Extracts signature inception metadata (`validFrom`) from DNSSEC RRSIGs
-- Validates the DNSKEY and DS record relationships cryptographically
-- Publishes trust anchors in RFC 7958 XML format (identical to IANA root trust anchor structure)
-- Supports multi-zone endpoints under `/in-zone/{zone-slug}.xml` (e.g. `in.xml`, `co-in.xml`, `gov-in.xml`, `ac-in.xml`)
-- Automatically refreshes trust anchors at configurable background intervals
+**trust-anchor** consists of two components:
+1. **`src/` (FastAPI Server)**: Generates and publishes RFC 9718 & RFC 7958 XML trust anchor files for `.in` and any sub-zone, including both KSK (`257`) and ZSK (`256`) keys and RRSIG `validFrom` timestamps.
+2. **`fetch_trustanchors_bind.py` (BIND 9 Synchronizer)**: Dynamically discovers active signed zones from the `trust.aiori.in` status index, fetches the XML files, and keeps BIND 9 `trust-anchors { ... };` configuration up to date automatically.
 
 ## Features
 
-- 🔄 **Multi-Zone & Sub-Zone Support**: Serves `in.`, `co.in.`, `gov.in.`, `ac.in.`, `res.in.`, `nic.in.`, `firm.in.`, `net.in.`, `org.in.`, `gen.in.`, `ind.in.`, `edu.in.`, `mil.in.`, `bank.in.`, `fin.in.`, etc.
-- 📜 **RFC 7958 Format**: Includes `<KeyDigest id="..." validFrom="...">`, `<KeyTag>`, `<Algorithm>`, `<DigestType>`, `<Digest>`, `<PublicKey>`, and `<Flags>`.
-- 🛡️ **DNSSEC Validation**: Validates child DNSKEY records against parent DS records.
-- 🔗 **Flexible URL Routing**: Serves `/in-zone/in.xml`, `/in-zone/co-in.xml`, `/in-zone/gov-in.xml`, etc.
-- ⚡ **Caching & On-Demand Fetching**: Pre-caches active signed zones and dynamically resolves any requested zone on demand.
+- **RFC 9718 & RFC 7958 Compliance**: Includes `xmlns="urn:ietf:params:xml:ns:trust-anchor"`, `<KeyDigest id="..." validFrom="...">`, `<KeyTag>`, `<Algorithm>`, `<DigestType>`, `<Digest>`, `<PublicKey>`, and `<Flags>`.
+- **Dynamic Zone Discovery**: `fetch_trustanchors_bind.py` automatically discovers new signed `.in` sub-zones directly from `https://trust.aiori.in/in-zone/` status index.
+- **Default ZSK & KSK Coverage**: Automatically includes both **257 (KSK)** and **256 (ZSK)** keys.
+- **Direct Authoritative Resolution**: Directly queries Root and TLD nameservers over UDP/TCP, bypassing local stub resolvers.
 
-## Endpoint Structure
+## Usage
 
-| URL Pattern | Zone Name | Description |
-| :--- | :--- | :--- |
-| `https://trust.aiori.in/in-zone/in.xml` | `in.` | Main `.in` TLD trust anchor |
-| `https://trust.aiori.in/in-zone/co-in.xml` | `co.in.` | Commercial sub-zone trust anchor |
-| `https://trust.aiori.in/in-zone/gov-in.xml` | `gov.in.` | Government sub-zone trust anchor |
-| `https://trust.aiori.in/in-zone/ac-in.xml` | `ac.in.` | Academic sub-zone trust anchor |
-| `https://trust.aiori.in/in-zone/` | All | Directory & Status index of all `.in` zones |
-
-## Installation & Running
-
-1. Clone and install dependencies:
-```bash
-git clone https://github.com/indiainternetfoundation/trust-anchor
-cd trust-anchor
-pip install -r requirements.txt
-```
-
-2. Configure environment variables in `.env`:
-```env
-ZONE=in.
-SOURCE=https://trust.aiori.in/in-zone/in.xml
-ENDPOINT=trust-anchor.xml
-REFRESH_INTERVAL=3600
-```
-
-3. Run the server:
+### 1. Run the XML Publishing Server (`src/`)
 ```bash
 uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```
+Published XML endpoints:
+- `https://trust.aiori.in/in-zone/in.xml`
+- `https://trust.aiori.in/in-zone/co-in.xml`
+- `https://trust.aiori.in/in-zone/gov-in.xml`
+- `https://trust.aiori.in/in-zone/` (HTML & JSON Status Index)
+
+### 2. Synchronize BIND 9 Trust Anchors (`fetch_trustanchors_bind.py`)
+```bash
+python fetch_trustanchors_bind.py --conf /etc/bind/named.conf --apply rndc
+```
+Options:
+- `--index-url`: Custom status index URL for dynamic discovery (default: `https://trust.aiori.in/in-zone/`)
+- `--no-discover`: Disable dynamic discovery and use explicit sources
+- `--no-zsk`: Exclude ZSKs (flags 256) and only include KSKs (flags 257)
+- `--apply rndc`: Run `rndc reconfig` after updating `named.conf`
+
 
 ## License
 
