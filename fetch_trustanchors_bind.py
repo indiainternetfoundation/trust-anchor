@@ -59,6 +59,64 @@ HTTP_TIMEOUT = 30
 USER_AGENT = "aiori-trust-anchor-updater/2.0"
 
 
+def fetch_ns_ips_dynamically(zone, custom_resolver=None):
+    """
+    Dynamically query live NS records and IP addresses (A records) for a given signed zone.
+    Returns a list of (ip, ns_hostname) tuples.
+    """
+    servers = []
+    zone_norm = norm_zone(zone)
+
+    try:
+        import dns.resolver
+        res = dns.resolver.Resolver(configure=True)
+        if custom_resolver:
+            res.nameservers = [custom_resolver]
+        else:
+            # Prioritize fast, reliable public resolvers over local stubs
+            res.nameservers = ["8.8.8.8", "1.1.1.1", "9.9.9.9"] + res.nameservers
+        res.timeout = 3
+        res.lifetime = 3
+
+        try:
+            ns_answers = res.resolve(zone_norm, "NS")
+            for ns_item in ns_answers:
+                ns_host = ns_item.target.to_text().strip(".")
+                try:
+                    ip_answers = res.resolve(ns_host, "A")
+                    for ip_item in ip_answers:
+                        servers.append((ip_item.to_text(), ns_host))
+                except Exception:
+                    # Fallback host resolution using socket
+                    try:
+                        import socket
+                        ip = socket.gethostbyname(ns_host)
+                        servers.append((ip, ns_host))
+                    except Exception:
+                        pass
+        except Exception as e:
+            log(f"  dynamic NS query for {zone_norm} info: {e}")
+    except ImportError:
+        pass
+
+    if not servers:
+        # Fallback host mapping if NS query failed or dnspython not installed
+        import socket
+        default_hosts = {
+            "ir.in.": ["ns1.ir.in", "ns2.ir.in", "ns3.ir.in"],
+            "gov.in.": ["ns1.registry.in", "ns2.registry.in", "ns3.registry.in", "ns4.registry.in"],
+            "in.": ["ns1.registry.in", "ns2.registry.in", "ns3.registry.in", "ns4.registry.in"],
+        }
+        hosts = default_hosts.get(zone_norm, default_hosts["in."])
+        for host in hosts:
+            try:
+                ip = socket.gethostbyname(host)
+                servers.append((ip, host))
+            except Exception:
+                pass
+    return servers
+
+
 def log(msg):
     print(msg, file=sys.stderr)
 
@@ -439,7 +497,68 @@ def split_statements(body):
     return out, body[last:]
 
 
-def update_config_text(text, new_by_zone):
+STUB_BEGIN_MARKER = "// === BEGIN STATIC-STUB ZONES ==="
+STUB_END_MARKER = "// === END STATIC-STUB ZONES ==="
+
+
+def render_static_stubs(valid_zones, resolver_ip=None):
+    """Render BIND 9 static-stub zone declarations dynamically for valid fetched zones."""
+    blocks = [
+        "// =========================================================================\n"
+        "// Out-of-Band DNSSEC static-stub Zone Declarations\n"
+        "// ========================================================================="
+    ]
+    for z in valid_zones:
+        if z == ".":
+            continue
+        z_label = z.rstrip(".")
+        servers = fetch_ns_ips_dynamically(z, custom_resolver=resolver_ip)
+        if not servers:
+            log(f"  skip static-stub for {z}: could not resolve active NS server IPs")
+            continue
+        srv_lines = []
+        for ip, comment in servers:
+            srv_lines.append(f"        {ip};    // {comment}")
+        srv_text = "\n".join(srv_lines)
+        b = (
+            f"// .{z_label.upper()} Zone\n"
+            f'zone "{z_label}" IN {{\n'
+            f"    type static-stub;\n"
+            f"    server-addresses {{\n"
+            f"        // All .{z_label} Nameservers\n"
+            f"{srv_text}\n"
+            f"    }};\n"
+            f"}};"
+        )
+        blocks.append(b)
+    return "\n\n".join(blocks)
+
+
+def update_static_stubs_in_config(text, valid_zones):
+    """Update or append static-stub zone blocks in named.conf."""
+    zones = [z for z in valid_zones if z != "."]
+    if not zones:
+        return text, False
+
+    stubs_body = render_static_stubs(zones)
+    block_content = f"{STUB_BEGIN_MARKER}\n{stubs_body}\n{STUB_END_MARKER}\n"
+
+    if STUB_BEGIN_MARKER in text and STUB_END_MARKER in text:
+        pattern = re.escape(STUB_BEGIN_MARKER) + r".*?" + re.escape(STUB_END_MARKER) + r"\n?"
+        new_text = re.sub(pattern, block_content, text, flags=re.DOTALL)
+        return new_text, new_text != text
+
+    # Remove unmanaged existing zone static-stub blocks if present to avoid duplicate definition errors
+    for z in zones:
+        z_lbl = z.rstrip(".")
+        z_pat = r'zone\s+"?' + re.escape(z_lbl) + r'\.?"?\s+IN\s*\{[^}]*type\s+static-stub;[^}]*\};\n?'
+        text = re.sub(z_pat, "", text, flags=re.IGNORECASE)
+
+    new_text = text.rstrip() + ("\n\n" if text.strip() else "") + block_content
+    return new_text, True
+
+
+def update_config_text(text, new_by_zone, manage_stubs=True):
     """Return (new_text, changed: bool, summary lines)."""
     managed = set(new_by_zone)
     blocks = find_blocks(text, "trust-anchors")
@@ -481,8 +600,6 @@ def update_config_text(text, new_by_zone):
             added, removed = desired[z] - old, old - desired[z]
             summary.append(f"  {z}: " + ("added" if not old else
                            f"updated (+{len(added)} / -{len(removed)})"))
-    if not changed:
-        return text, False, summary
 
     parts = [k.rstrip() for k in kept if k.strip()]
     new_body = "\n".join(parts)
@@ -492,7 +609,12 @@ def update_config_text(text, new_by_zone):
         new_body += f"\n    // {z} — managed by fetch_trustanchors_bind.py\n"
         new_body += "\n".join(f"    {l}" for l in lines) + "\n"
     new_text = text[:ob + 1] + new_body + (tail if tail.strip() else "") + text[cb:]
-    return new_text, True, summary
+
+    if manage_stubs:
+        new_text, stubs_changed = update_static_stubs_in_config(new_text, list(new_by_zone.keys()))
+        changed = changed or stubs_changed
+
+    return new_text, changed, summary
 
 
 # --------------------------------------------------------------------------- #
@@ -528,6 +650,10 @@ def main():
                     help="include ZSKs (flags 256) in addition to KSKs (default: True)")
     ap.add_argument("--no-zsk", action="store_false", dest="include_zsk",
                     help="exclude ZSKs (flags 256) and only pin KSKs (flags 257)")
+    ap.add_argument("--manage-stubs", action="store_true", dest="manage_stubs", default=True,
+                    help="automatically write/update static-stub zone definitions for valid trust anchors (default: True)")
+    ap.add_argument("--no-stubs", action="store_false", dest="manage_stubs",
+                    help="disable static-stub zone generation")
     ap.add_argument("--no-verify-iana", action="store_true",
                     help="skip S/MIME verification of root-anchors.xml")
     ap.add_argument("--icann-ca", default=IANA_CA,
@@ -599,7 +725,7 @@ def main():
         log(f"{args.conf} does not exist; it will be created")
         text = ""
 
-    new_text, changed, summary = update_config_text(text, new_by_zone)
+    new_text, changed, summary = update_config_text(text, new_by_zone, manage_stubs=args.manage_stubs)
     log("\nSummary:")
     for s in summary:
         log(s)
