@@ -7,7 +7,7 @@ import os
 import time
 
 from fastapi import FastAPI, HTTPException, Response, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from dotenv import load_dotenv
 
 from .utils import (
@@ -109,7 +109,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="DNSSEC Trust Anchor Publisher",
     version="2.0",
-    description="Publishes RFC 7958 DNSSEC trust anchor XML files for .in and sub-zones.",
+    description="Publishes RFC 7958 & RFC 9718 DNSSEC trust anchor XML files for .in and sub-zones.",
     contact={
         "name": "India Internet Foundation",
         "url": "https://trust.aiori.in",
@@ -120,6 +120,18 @@ app = FastAPI(
     },
     lifespan=lifespan
 )
+
+
+@app.exception_handler(404)
+async def custom_404_handler(request: Request, exc: HTTPException):
+    """Redirect any invalid/404 URLs to https://trust.aiori.in/in-zone/"""
+    return RedirectResponse(url="/in-zone/", status_code=307)
+
+
+@app.get("/")
+async def root_redirect():
+    """Redirect root domain trust.aiori.in to /in-zone/"""
+    return RedirectResponse(url="/in-zone/", status_code=307)
 
 
 @app.get("/healthz")
@@ -138,19 +150,38 @@ async def healthz():
 async def zone_index(request: Request):
     """HTML / JSON index of available .in zone trust anchors."""
     base = str(request.base_url).rstrip("/")
-    items = []
-    for z in ALL_IN_ZONES:
+    
+    signed_items = []
+    unsigned_items = []
+
+    for z in set(ALL_IN_ZONES + KNOWN_SIGNED_ZONES):
         slug = zone_to_slug(z)
-        is_signed = z in KNOWN_SIGNED_ZONES or (z in ZONE_CACHE and ZONE_CACHE[z]["xml"] is not None)
-        items.append({
-            "zone": z,
-            "filename": slug,
-            "url": f"{base}/in-zone/{slug}",
-            "status": "Signed & Available" if is_signed else "Unsigned / No DS Record"
-        })
+        is_signed = z in KNOWN_SIGNED_ZONES or (z in ZONE_CACHE and ZONE_CACHE[z].get("xml") is not None)
+        
+        if is_signed:
+            signed_items.append({
+                "zone": z,
+                "filename": slug,
+                "url": f"{base}/in-zone/{slug}",
+                "status": "Signed & Available",
+                "is_signed": True
+            })
+        else:
+            unsigned_items.append({
+                "zone": z,
+                "status": "Unsigned / No DS Record",
+                "is_signed": False
+            })
+
+    # Sort signed items: "in." first, then alphabetically
+    signed_items.sort(key=lambda x: (0 if x["zone"] == "in." else 1, x["zone"]))
+    # Sort unsigned items alphabetically
+    unsigned_items.sort(key=lambda x: x["zone"])
+
+    all_items = signed_items + unsigned_items
 
     if "application/json" in request.headers.get("accept", ""):
-        return JSONResponse(items)
+        return JSONResponse(all_items)
 
     html_lines = [
         "<!DOCTYPE html><html><head><title>DNSSEC Trust Anchors (.in)</title>",
@@ -160,16 +191,23 @@ async def zone_index(request: Request):
         "th{background:#1e293b;color:#94a3b8;}",
         "a{color:#38bdf8;text-decoration:none;} a:hover{text-decoration:underline;}",
         ".badge-signed{color:#4ade80;font-weight:600;} .badge-unsigned{color:#f87171;}",
+        ".text-muted{color:#64748b;}",
         "</style></head><body>",
         "<h1>DNSSEC Trust Anchors (.in Zones)</h1>",
-        "<p>Standard RFC 7958 XML Trust Anchors for .in second-level zones.</p>",
+        "<p>Standard RFC 7958 & RFC 9718 XML Trust Anchors for .in second-level zones.</p>",
         "<table><thead><tr><th>Zone</th><th>XML Endpoint</th><th>Status</th></tr></thead><tbody>"
     ]
-    for item in items:
-        status_cls = "badge-signed" if "Signed" in item["status"] else "badge-unsigned"
+    for item in all_items:
+        if item["is_signed"]:
+            status_cls = "badge-signed"
+            link_html = f"<a href='/in-zone/{item['filename']}'>/in-zone/{item['filename']}</a>"
+        else:
+            status_cls = "badge-unsigned"
+            link_html = "<span class='text-muted'>-</span>"
+
         html_lines.append(
             f"<tr><td><strong>{item['zone']}</strong></td>"
-            f"<td><a href='/in-zone/{item['filename']}'>/in-zone/{item['filename']}</a></td>"
+            f"<td>{link_html}</td>"
             f"<td><span class='{status_cls}'>{item['status']}</span></td></tr>"
         )
     html_lines.append("</tbody></table></body></html>")
@@ -197,10 +235,8 @@ async def get_in_zone_trust_anchor(filename: str):
         xml_content = fetch_and_cache_zone(zone)
         return Response(content=xml_content, media_type="application/xml")
     except Exception as e:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Unable to generate Trust Anchor for zone '{zone}': {str(e)}"
-        )
+        # Redirect invalid/unsigned zone requests back to /in-zone/
+        return RedirectResponse(url="/in-zone/", status_code=307)
 
 
 @app.get("/{filename:path}")
@@ -219,9 +255,7 @@ async def get_root_trust_anchor(filename: str):
         xml_content = fetch_and_cache_zone(zone)
         return Response(content=xml_content, media_type="application/xml")
     except Exception as e:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Unable to generate Trust Anchor for '{filename}': {str(e)}"
-        )
+        return RedirectResponse(url="/in-zone/", status_code=307)
+
 
 
