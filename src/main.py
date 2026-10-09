@@ -42,14 +42,14 @@ KNOWN_SIGNED_ZONES = [
     "bank.in.",
     "fin.in.",
     "nic.in.",
-    "ir.in"
+    "ir.in."
 ]
 
 # All requested .in zones list for reference
 ALL_IN_ZONES = [
     "in.", "co.in.", "com.in.", "firm.in.", "net.in.", "org.in.", "gen.in.", "ind.in.",
     "ernet.in.", "ac.in.", "edu.in.", "res.in.", "gov.in.", "mil.in.", "bank.in.", "fin.in.", "nic.in.",
-    "5g.in.", "6g.in.", "ai.in.", "am.in.", "bihar.in.", "biz.in.", "business.in.", "ca.in.", "cn.in.",
+    "ir.in.", "5g.in.", "6g.in.", "ai.in.", "am.in.", "bihar.in.", "biz.in.", "business.in.", "ca.in.", "cn.in.",
     "coop.in.", "cs.in.", "delhi.in.", "dr.in.", "er.in.", "gujarat.in.", "info.in.", "int.in.",
     "internet.in.", "io.in.", "me.in.", "pg.in.", "post.in.", "pro.in.", "travel.in.", "tv.in.",
     "uk.in.", "up.in.", "us.in."
